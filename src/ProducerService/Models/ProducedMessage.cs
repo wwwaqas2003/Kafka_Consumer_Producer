@@ -1,4 +1,4 @@
-using MongoDB.Bson;
+﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
 namespace ProducerService.Models;
@@ -11,6 +11,9 @@ public class ProducedMessage
 
     [BsonElement("message")]
     public required string Message { get; set; }
+
+    [BsonElement("messageId")] 
+    public long? MessageId { get; set; }
 
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -1,21 +1,26 @@
+using ConsumerService;
 using ConsumerService.Services;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-// Add the Kafka consumer service
-builder.Services.AddHostedService<KafkaConsumerService>();
+builder.Services.AddConsumerServices(builder.Configuration);
 
-// Add logging
-builder.Services.AddLogging(logging =>
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
 {
-    logging.AddConsole();
-    logging.SetMinimumLevel(LogLevel.Information);
-});
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
-var host = builder.Build();
+app.MapControllers();
 
-// Log startup information
-var logger = host.Services.GetRequiredService<ILogger<Program>>();
-logger.LogInformation("Consumer Service starting up...");
+// Health endpoint
+app.MapGet("/health", () =>
+    Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow, service = "Consumer Service" }));
 
-await host.RunAsync();
+app.Run();

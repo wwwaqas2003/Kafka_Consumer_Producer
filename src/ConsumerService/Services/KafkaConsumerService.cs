@@ -1,36 +1,31 @@
 using Confluent.Kafka;
+using ConsumerService.Models;
 
 namespace ConsumerService.Services;
 
 public class KafkaConsumerService : BackgroundService
 {
-    private readonly ILogger<KafkaConsumerService> _logger;
     private readonly IConsumer<Ignore, string> _consumer;
-    private readonly string _topicName;
+    private readonly IConsumerMongoDbService _mongo;
+    private readonly ILogger<KafkaConsumerService> _logger;
+    private readonly string _topic;
 
-    public KafkaConsumerService(IConfiguration configuration, ILogger<KafkaConsumerService> logger)
+    public KafkaConsumerService(
+        IConsumer<Ignore, string> consumer,
+        IConsumerMongoDbService mongo,
+        ILogger<KafkaConsumerService> logger,
+        string topic)
     {
+        _consumer = consumer;
+        _mongo = mongo;
         _logger = logger;
-        _topicName = configuration["Kafka:TopicName"] ?? "messages";
-
-        var config = new ConsumerConfig
-        {
-            BootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092",
-            GroupId = configuration["Kafka:GroupId"] ?? "consumer-group",
-            AutoOffsetReset = AutoOffsetReset.Earliest,
-            EnableAutoCommit = true,
-            EnableAutoOffsetStore = false
-        };
-
-        _consumer = new ConsumerBuilder<Ignore, string>(config).Build();
-        _logger.LogInformation("Kafka consumer initialized with topic: {TopicName}, GroupId: {GroupId}", 
-            _topicName, config.GroupId);
+        _topic = topic;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _consumer.Subscribe(_topicName);
-        _logger.LogInformation("Consumer subscribed to topic: {TopicName}", _topicName);
+        _consumer.Subscribe(_topic);
+        _logger.LogInformation("Subscribed to {Topic}", _topic);
 
         try
         {
@@ -38,55 +33,44 @@ public class KafkaConsumerService : BackgroundService
             {
                 try
                 {
-                    var consumeResult = _consumer.Consume(stoppingToken);
-                    
-                    if (consumeResult?.Message?.Value != null)
+                    var result = _consumer.Consume(stoppingToken);
+                    if (result?.Message?.Value == null) continue;
+
+                    _logger.LogInformation("Message at offset {Offset}", result.Offset);
+
+                    var doc = new ConsumedMessage
                     {
-                        _logger.LogInformation("Consumed message: {Message} from topic: {Topic}, partition: {Partition}, offset: {Offset}",
-                            consumeResult.Message.Value,
-                            consumeResult.Topic,
-                            consumeResult.Partition,
-                            consumeResult.Offset);
+                        Message = result.Message.Value,
+                        Topic = result.Topic,
+                        Partition = result.Partition.Value,
+                        Offset = result.Offset.Value,
+                        ConsumedAt = DateTime.UtcNow
+                    };
 
-                      
-                        Console.WriteLine($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] Consumed: {consumeResult.Message.Value}");
+                    
+                    _ = _mongo.SaveConsumedMessageAsync(doc);
 
-                     
-                        _consumer.StoreOffset(consumeResult);
-                    }
+                  
+                    _consumer.Commit(result);
                 }
                 catch (ConsumeException ex)
                 {
-                    _logger.LogError(ex, "Error consuming message from Kafka");
-                    
+                    _logger.LogError(ex, "Consume error");
                     await Task.Delay(1000, stoppingToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    _logger.LogInformation("Consumer operation was cancelled");
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Unexpected error in consumer loop");
-                    await Task.Delay(5000, stoppingToken);
                 }
             }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Fatal error in Kafka consumer");
-        }
         finally
         {
+            _consumer.Unsubscribe();
             _consumer.Close();
-            _logger.LogInformation("Kafka consumer closed");
+            _logger.LogInformation("Consumer closed");
         }
     }
 
     public override void Dispose()
     {
-        _consumer?.Dispose();
+        _consumer.Dispose();
         base.Dispose();
     }
 }
