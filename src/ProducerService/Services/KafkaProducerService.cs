@@ -1,152 +1,56 @@
 using Confluent.Kafka;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
+using ProducerService.Models;
 
-namespace ProducerService.Services;
-
-public class KafkaProducerService : IKafkaProducerService, IDisposable
+namespace ProducerService.Services
 {
-    private readonly IProducer<long, string> _producer;
-    private readonly string _topicName;
-    private readonly string _bootstrapServers;
-    private readonly ILogger<KafkaProducerService> _logger;
-    private bool _isConnected = false;
-
-    public KafkaProducerService(IConfiguration configuration, ILogger<KafkaProducerService> logger)
+    public class KafkaProducerService : IKafkaProducerService, IDisposable
     {
-        _logger = logger;
-        _topicName = configuration["Kafka:TopicName"] ?? "messages";
-        _bootstrapServers = configuration["Kafka:BootstrapServers"] ?? "localhost:9092";
+        private readonly IProducer<long, string> _producer;
+        private readonly IMongoDbService _mongoService;
+        private readonly string _topic;
+        private readonly ILogger<KafkaProducerService> _logger;
 
-        var config = new ProducerConfig
+        public KafkaProducerService(string servers, string topic, IMongoDbService mongo, ILogger<KafkaProducerService> logger)
         {
-            BootstrapServers = _bootstrapServers,
-            Acks = Acks.All,
-            EnableIdempotence = true,
-            MessageTimeoutMs = 10000,
-            RequestTimeoutMs = 5000,
-            RetryBackoffMs = 1000,
-            SocketTimeoutMs = 10000,
-            MessageSendMaxRetries = 3
-        };
+            _logger = logger;
+            _mongoService = mongo;
+            _topic = topic;
 
-        try
-        {
-            _producer = new ProducerBuilder<long, string>(config)
-                //.SetErrorHandler((_, e) =>
-                //{
-                //    _logger.LogError("Kafka producer error: {Error}", e.Reason);
-                //    _isConnected = false;
-                //})
-                //.SetLogHandler((_, logMessage) =>
-                //{
-                //    if (logMessage.Level <= SyslogLevel.Warning)
-                //        _logger.LogWarning("Kafka log: {Message}", logMessage.Message);
-                //})
-                .Build();
-
-            //_logger.LogInformation("Kafka producer initialized with bootstrap servers: {BootstrapServers}, topic: {TopicName}",
-            //    _bootstrapServers, _topicName);
+            _producer = new ProducerBuilder<long, string>(new ProducerConfig
+            {
+                BootstrapServers = servers,
+                Acks = Acks.All,
+                EnableIdempotence = true
+            }).Build();
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to initialize Kafka producer");
-            throw;
-        }
-    }
+        public long? LastGeneratedMessageId { get; private set; }
 
-    public long? LastGeneratedMessageId { get; private set; }
-
-    public async Task<bool> ProduceMessageAsync(string message)
-    {
-        if (_producer == null)
+        public async Task<bool> ProduceMessageAsync(string message)
         {
-            _logger.LogError("Kafka producer is not initialized");
-            LastGeneratedMessageId = null;
-            return false;
+            var result = await ProduceAndStoreMessageAsync(message);
+            LastGeneratedMessageId = result.MessageId;
+            return result.Success;
         }
 
-        try
+        public async Task<ProduceResult> ProduceAndStoreMessageAsync(string message)
         {
-            // Test connection if not already connected
-            //if (!_isConnected)
-            //{
-            //    await TestConnectionAsync();
-            //}
+            try
+            {
+                var id = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var result = await _producer.ProduceAsync(_topic, new Message<long, string> { Key = id, Value = message });
+                _logger.LogInformation("Produced to {Topic} offset {Offset}", result.Topic, result.Offset);
 
-            var messageId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            LastGeneratedMessageId = messageId;
-            _logger.LogInformation("Generated MessageID: {MessageId}", messageId);
+                _ = _mongoService.SaveProducedMessageAsync(new ProducedMessage { Message = message, MessageId = id, CreatedAt = DateTime.UtcNow });
 
-            var result = await _producer.ProduceAsync(
-                _topicName,
-                new Message<long, string>
-                {
-                    Key = messageId,
-                    Value = message
-                });
-
-            _logger.LogInformation("Message produced to topic {Topic} with MessageID {MessageId} at offset {Offset}",
-                result.Topic, messageId, result.Offset);
-
-            _isConnected = true;
-            return true;
+                return new ProduceResult { Success = true, MessageId = id, Timestamp = DateTime.UtcNow };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Kafka production failed");
+                return new ProduceResult { Success = false };
+            }
         }
-        catch (ProduceException<long, string> ex)
-        {
-            _logger.LogError(ex, "Failed to produce message to Kafka. Bootstrap servers: {BootstrapServers}, Topic: {Topic}",
-                _bootstrapServers, _topicName);
 
-            LastGeneratedMessageId = null;
-            _isConnected = false;
-            return false;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unexpected error producing message to Kafka");
-            LastGeneratedMessageId = null;
-            _isConnected = false;
-            return false;
-        }
-    }
-
-    //private async Task TestConnectionAsync()
-    //{
-    //    try
-    //    {
-    //        var testMessageId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-    //
-    //        var result = await _producer.ProduceAsync(
-    //            _topicName,
-    //            new Message<long, string>
-    //            {
-    //                Key = testMessageId,
-    //                Value = "connection_test"
-    //            });
-    //
-    //        _logger.LogInformation("Successfully connected to Kafka. Topic: {Topic}, Test MessageID: {MessageId}, Offset: {Offset}",
-    //            result.Topic, testMessageId, result.Offset);
-    //
-    //        _isConnected = true;
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        _logger.LogWarning(ex, "Failed to test Kafka connection");
-    //        _isConnected = false;
-    //    }
-    //}
-
-    public void Dispose()
-    {
-        try
-        {
-            _producer?.Flush(TimeSpan.FromSeconds(10));
-            _producer?.Dispose();
-            //_logger.LogInformation("Kafka producer disposed");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error disposing Kafka producer");
-        }
+        public void Dispose() => _producer?.Dispose();
     }
 }

@@ -1,7 +1,11 @@
-namespace ProducerService.Services;
+using ProducerService.Models;
 
-public interface IKafkaProducerService
+namespace ProducerService.Services
 {
-    Task<bool> ProduceMessageAsync(string message);
-    long? LastGeneratedMessageId { get; }
+    public interface IKafkaProducerService
+    {
+        long? LastGeneratedMessageId { get; }
+        Task<bool> ProduceMessageAsync(string message);
+        Task<ProduceResult> ProduceAndStoreMessageAsync(string message);
+    }
 }

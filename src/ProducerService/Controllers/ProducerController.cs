@@ -1,66 +1,35 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using ProducerService.Models;
 using ProducerService.Services;
+
 namespace ProducerService.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
     public class ProducerController : ControllerBase
     {
-        private readonly IKafkaProducerService _kafkaService;
-        // private readonly IMongoDbService _mongoService; // MongoDB removed
+        private readonly IKafkaProducerService _kafka;
         private readonly ILogger<ProducerController> _logger;
-        public ProducerController(
-            IKafkaProducerService kafkaService,
-            // IMongoDbService mongoService, // MongoDB removed
-            ILogger<ProducerController> logger)
+
+        public ProducerController(IKafkaProducerService kafka, ILogger<ProducerController> logger)
         {
-            _kafkaService = kafkaService;
-            // _mongoService = mongoService; // MongoDB removed
+            _kafka = kafka;
             _logger = logger;
         }
+
         [HttpPost("produce")]
-        public async Task<IActionResult> Produce([FromBody] MessageRequest request)
+        public async Task<IActionResult> Produce([FromBody] MessageRequest req)
         {
-            if (string.IsNullOrWhiteSpace(request.Message))
+            if (string.IsNullOrWhiteSpace(req.Message))
                 return BadRequest(new { error = "Message cannot be empty" });
-            // Create the message object
-            var producedMessage = new ProducedMessage
-            {
-                Message = request.Message,
-                CreatedAt = DateTime.UtcNow
-            };
-            // Save to MongoDB (commented out)
-            // var mongoResult = await _mongoService.SaveProducedMessageAsync(producedMessage);
-            // if (!mongoResult)
-            // {
-            //     _logger.LogError("Failed to save message to MongoDB");
-            //     return Problem("Failed to save message to database");
-            // }
-            // Send to Kafka
-            var kafkaResult = await _kafkaService.ProduceMessageAsync(request.Message);
-            if (!kafkaResult)
-            {
-                _logger.LogError("Failed to send message to Kafka");
-                return Problem("Failed to send message to Kafka");
-            }
 
-            // Get the messageId from Kafka producer service
-            var messageId = _kafkaService.LastGeneratedMessageId;
+            var result = await _kafka.ProduceAndStoreMessageAsync(req.Message);
+            if (!result.Success) return Problem("Failed to send message to Kafka");
 
-            _logger.LogInformation("Message processed successfully: {Message}", request.Message);
-            return Ok(new
-            {
-                success = true,
-                message = "Message sent successfully",
-                messageId = messageId,
-                timestamp = producedMessage.CreatedAt
-            });
+            return Ok(new { success = true, req.Message, result.MessageId, result.Timestamp });
         }
+
         [HttpGet("/")]
-        public IActionResult Root()
-        {
-            return Ok("Producer Service is running!");
-        }
+        public IActionResult Root() => Ok("Producer Service is running!");
     }
 }

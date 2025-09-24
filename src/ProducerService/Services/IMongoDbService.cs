@@ -1,8 +1,9 @@
 using ProducerService.Models;
 
-namespace ProducerService.Services;
-
-public interface IMongoDbService
+namespace ProducerService.Services
 {
-    Task<bool> SaveProducedMessageAsync(ProducedMessage message);
+    public interface IMongoDbService
+    {
+        Task<bool> SaveProducedMessageAsync(ProducedMessage message);
+    }
 }
