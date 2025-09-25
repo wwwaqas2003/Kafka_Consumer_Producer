@@ -1,35 +1,33 @@
 ﻿using MongoDB.Driver;
 using ConsumerService.Models;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ConsumerService.Services;
 
 public class ConsumerMongoDbService : IConsumerMongoDbService
 {
     private readonly IMongoCollection<ConsumedMessage> _consumedMessagesCollection;
+    private readonly IMongoCollection<Student> _studentsCollection;
+    private readonly IMongoDatabase _database;
     private readonly ILogger<ConsumerMongoDbService> _logger;
 
-    public ConsumerMongoDbService(
-        string connectionString,
-        string databaseName,
-        ILogger<ConsumerMongoDbService> logger)
+    public IMongoCollection<T> GetCollection<T>(string collectionName)
     {
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        return _database.GetCollection<T>(collectionName);
+    }
 
-        if (string.IsNullOrWhiteSpace(connectionString))
-            throw new ArgumentException("Connection string cannot be null or empty", nameof(connectionString));
+    public ConsumerMongoDbService(IConfiguration config, ILogger<ConsumerMongoDbService> logger)
+    {
+        _logger = logger;
 
-        if (string.IsNullOrWhiteSpace(databaseName))
-            throw new ArgumentException("Database name cannot be null or empty", nameof(databaseName));
+        var client = new MongoClient(config["MongoDB:ConnectionString"]);
+        _database = client.GetDatabase(config["MongoDB:DatabaseName"]);
 
-        var settings = MongoClientSettings.FromConnectionString(connectionString);
-        settings.ServerSelectionTimeout = TimeSpan.FromSeconds(30);
-        settings.ConnectTimeout = TimeSpan.FromSeconds(30);
+        _studentsCollection = _database.GetCollection<Student>("Students");
+        _consumedMessagesCollection = _database.GetCollection<ConsumedMessage>("ConsumedMessages");
 
-        var client = new MongoClient(settings);
-        var database = client.GetDatabase(databaseName);
-        _consumedMessagesCollection = database.GetCollection<ConsumedMessage>("ConsumedMessages");
-
-        _logger.LogInformation("Consumer MongoDB service initialized - Database: {DatabaseName}", databaseName);
+        _logger.LogInformation("Consumer MongoDB service initialized - Database: {DatabaseName}", config["MongoDB:DatabaseName"]);
     }
 
     public async Task<bool> SaveConsumedMessageAsync(ConsumedMessage message)
@@ -47,21 +45,45 @@ public class ConsumerMongoDbService : IConsumerMongoDbService
         }
     }
 
-    public async Task<List<ConsumedMessage>> GetConsumedMessagesAsync(int page = 1, int pageSize = 50)
+    public async Task<(bool exists, bool success)> SaveOrUpdateStudentAsync(Student student)
     {
-        return await _consumedMessagesCollection
-            .Find(_ => true)
-            .Skip((page - 1) * pageSize)
-            .Limit(pageSize)
-            .ToListAsync();
+        var success = await UpdateStudentIfExistsAsync(student);
+        return (success, success);
     }
 
-    public async Task<ConsumedMessage?> GetConsumedMessageByIdAsync(string id)
+ 
+    public async Task<bool> UpdateStudentIfExistsAsync(Student student)
     {
-        return await _consumedMessagesCollection
-            .Find(m => m.Id == id)
-            .FirstOrDefaultAsync();
+        try
+        {
+            var filter = Builders<Student>.Filter.Eq(s => s.RollNumber, student.RollNumber);
+            var update = Builders<Student>.Update.Set(s => s.Name, student.Name);
+
+            var result = await _studentsCollection.UpdateOneAsync(filter, update);
+            if (result.MatchedCount == 0)
+            {
+                _logger.LogWarning("Student with RollNumber {RollNumber} does not exist.", student.RollNumber);
+                return false;
+            }
+
+            _logger.LogInformation("Student {RollNumber} updated successfully.", student.RollNumber);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to update student {RollNumber}", student.RollNumber);
+            return false;
+        }
     }
+
+    public async Task<List<ConsumedMessage>> GetConsumedMessagesAsync(int page = 1, int pageSize = 50)
+        => await _consumedMessagesCollection.Find(_ => true)
+                                            .Skip((page - 1) * pageSize)
+                                            .Limit(pageSize)
+                                            .ToListAsync();
+
+    public async Task<ConsumedMessage?> GetConsumedMessageByIdAsync(string id)
+        => await _consumedMessagesCollection.Find(m => m.Id == id).FirstOrDefaultAsync();
 
     public async Task<object> GetConsumerStatsAsync()
     {

@@ -8,11 +8,12 @@ public static class ServiceCollectionExtensions
     public static void AddConsumerServices(this IServiceCollection services, IConfiguration config)
     {
         // MongoDB
-        services.AddSingleton<IConsumerMongoDbService>(sp =>
-            new ConsumerMongoDbService(
-                config["MongoDB:ConnectionString"],
-                config["MongoDB:DatabaseName"],
-                sp.GetRequiredService<ILogger<ConsumerMongoDbService>>()));
+        services.AddSingleton<IConsumerMongoDbService, ConsumerMongoDbService>(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var logger = sp.GetRequiredService<ILogger<ConsumerMongoDbService>>();
+            return new ConsumerMongoDbService(config, logger);
+        });
 
         // Kafka Consumer
         services.AddSingleton<IConsumer<Ignore, string>>(_ =>

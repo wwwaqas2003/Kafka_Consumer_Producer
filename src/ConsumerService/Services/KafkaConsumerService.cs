@@ -34,23 +34,32 @@ public class KafkaConsumerService : BackgroundService
                 try
                 {
                     var result = _consumer.Consume(stoppingToken);
-                    if (result?.Message?.Value == null) continue;
+                    if (result?.Message?.Value == null)
+                        continue;
 
                     _logger.LogInformation("Message at offset {Offset}", result.Offset);
 
-                    var doc = new ConsumedMessage
-                    {
-                        Message = result.Message.Value,
-                        Topic = result.Topic,
-                        Partition = result.Partition.Value,
-                        Offset = result.Offset.Value,
-                        ConsumedAt = DateTime.UtcNow
-                    };
+           
+                    var student = System.Text.Json.JsonSerializer.Deserialize<Student>(result.Message.Value);
+                    if (student == null)
+                        continue;
+
+                    // ye rl
+                    if (string.IsNullOrEmpty(student.RollNumber))
+                        student.RollNumber = result.Message.Key.ToString();
 
                     
-                    _ = _mongo.SaveConsumedMessageAsync(doc);
+                    bool exists = await _mongo.UpdateStudentIfExistsAsync(student);
 
-                  
+                    if (exists)
+                    {
+                        _logger.LogInformation("Student {RollNumber} exists. Name updated to {Name}", student.RollNumber, student.Name);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Student {RollNumber} does not exist. Cannot update name.", student.RollNumber);
+                    }
+
                     _consumer.Commit(result);
                 }
                 catch (ConsumeException ex)
